@@ -60,6 +60,40 @@ On a headless Linux machine, prefix the command with `MUJOCO_GL=egl` so MuJoCo c
 
 The command writes prompts, plans, state snapshots, and execution videos under `data/gemini_smoke/`. After it succeeds, remove `--no_feedback`, increase `--tsteps`, and increase `--num_replans` for a full episode.
 
+### Run image-conditioned dual-arm planning without simulation
+
+The visual dialog entry point keeps the original two-agent discussion pattern,
+but treats `LeftArm` and `RightArm` as the two arms of one robot. Each dialog
+round produces one joint planned action, and the runner accumulates the rounds
+until the agents output `TASK_DONE`. It does not initialize MuJoCo, run RRT/IK,
+or create videos.
+
+Long task instructions live in `prompting/visual_tasks/` and are selected by a
+short task ID. List the registered tasks with:
+
+```bash
+python run_visual_dialog.py --list_tasks
+```
+
+The `office` task uses `rocobench/envs/env_office_p2.jpg` by default, so the
+shortest command is:
+
+```bash
+python run_visual_dialog.py -t office
+```
+
+Override the first-person input, or pass several simultaneous views, with:
+
+```bash
+python run_visual_dialog.py -t office -i /path/to/front.jpg -i /path/to/side.jpg
+```
+
+Edit the full ordered instruction in
+`prompting/visual_tasks/task_office.py`. Accepted steps, per-agent calls, chat
+history, and the final `plan.json` / `plan.txt` are saved under
+`data/visual_dialog/<run_name>/<timestamp>/`. The action vocabulary is not yet
+restricted to a user-provided atomic action library.
+
 
 ## Contact
 Please direct to [Mandi Zhao](https://mandizhao.github.io). 
@@ -76,3 +110,17 @@ If you are interested in contributing or collaborating, please feel free to reac
       primaryClass={cs.RO}
 }
 ```
+
+```
+python -c "
+import json
+p='data/vertex_smoke/run_1/step_0/prompts/replan0_0829-1446.json'
+data=json.load(open(p))
+print(next(x['message'] for x in data if x.get('sender') == 'Planner'))
+"
+```
+
+```
+python run_visual_dialog.py -t office
+```
+

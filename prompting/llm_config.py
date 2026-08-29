@@ -1,7 +1,7 @@
 import os
 import random
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from google import genai
 from google.genai import errors, types
@@ -67,8 +67,23 @@ def _serialize_usage(usage_metadata: Any) -> Dict[str, Any]:
     return {"value": str(usage_metadata)}
 
 
+def detect_image_mime_type(image_data: bytes) -> str:
+    """Detect a supported image MIME type from its file signature."""
+    if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if (
+        len(image_data) >= 12
+        and image_data.startswith(b"RIFF")
+        and image_data[8:12] == b"WEBP"
+    ):
+        return "image/webp"
+    raise ValueError("Unsupported image data; expected PNG, JPEG, or WebP")
+
+
 class VertexGeminiClient:
-    """Synchronous Vertex AI Gemini client used by the simulation prompters."""
+    """Synchronous Vertex AI Gemini client used by project prompters."""
 
     def __init__(
         self,
@@ -134,6 +149,44 @@ class VertexGeminiClient:
                 max_output_tokens=max_output_tokens,
             ),
         )
+        return self._extract_response(response)
+
+    def generate_multimodal(
+        self,
+        prompt: str,
+        image_paths: Iterable[Union[str, Path]],
+        max_output_tokens: int,
+        temperature: float = 0,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Generate text from a prompt and one or more local scene images."""
+        parts: List[types.Part] = [types.Part.from_text(text=prompt)]
+        loaded_images = 0
+        for configured_path in image_paths:
+            image_path = Path(configured_path).expanduser()
+            image_data = image_path.read_bytes()
+            parts.append(
+                types.Part.from_bytes(
+                    data=image_data,
+                    mime_type=detect_image_mime_type(image_data),
+                )
+            )
+            loaded_images += 1
+
+        if loaded_images == 0:
+            raise ValueError("generate_multimodal requires at least one image")
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=[types.Content(role="user", parts=parts)],
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+        return self._extract_response(response)
+
+    @staticmethod
+    def _extract_response(response: Any) -> Tuple[str, Dict[str, Any]]:
         response_text = response.text
         if response_text is None or not response_text.strip():
             raise RuntimeError(

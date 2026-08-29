@@ -1,23 +1,23 @@
-import os 
-import json
-import pickle 
-import time
-import numpy as np
-from datetime import datetime
-from os.path import join
-from typing import List, Tuple, Dict, Union, Optional, Any
+from __future__ import annotations
 
-from rocobench.subtask_plan import LLMPathPlan
-from rocobench.rrt_multi_arm import MultiArmRRT
-from rocobench.envs import MujocoSimEnv, EnvState 
-from .feedback import FeedbackManager
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
+
 from .llm_config import (
     DEFAULT_GEMINI_MODEL,
     VertexGeminiClient,
     get_retry_delay,
     is_retryable_error,
 )
-from .parser import LLMResponseParser
+
+if TYPE_CHECKING:
+    from rocobench.envs import EnvState, MujocoSimEnv
+
+    from .feedback import FeedbackManager
+    from .parser import LLMResponseParser
 
 PATH_PLAN_INSTRUCTION="""
 [Path Plan Instruction]
@@ -34,6 +34,16 @@ Each <coord> is a tuple (x,y,z) for gripper location, follow these steps to plan
         e.g. given path [(0.1, 0.2, 0.3), (0.2, 0.2. 0.3), (0.3, 0.4. 0.7)], the distance between steps (0.1, 0.2, 0.3)-(0.2, 0.2. 0.3) is too low, and between (0.2, 0.2. 0.3)-(0.3, 0.4. 0.7) is too high. You can change the path to [(0.1, 0.2, 0.3), (0.15, 0.3. 0.5), (0.3, 0.4. 0.7)] 
     If a plan failed to execute, re-plan to choose more feasible steps in each PATH, or choose different actions.
 """
+
+
+def _write_json(path: str, value: Any) -> None:
+    with open(path, "w", encoding="utf-8") as output_file:
+        json.dump(value, output_file, ensure_ascii=False, indent=2)
+
+
+def _contains_task_done(response: str) -> bool:
+    return any(line.strip() == "TASK_DONE" for line in response.splitlines())
+
 
 class DialogPrompter:
     """
@@ -129,7 +139,12 @@ class DialogPrompter:
         ret += f"== Current Round ==\n"
         return ret
     
-    def prompt_one_round(self, obs: EnvState, save_path: str = ""): 
+    def prompt_one_round(
+        self,
+        obs: EnvState,
+        save_path: str = "",
+        image_paths: Optional[Sequence[Union[str, Path]]] = None,
+    ):
         plan_feedbacks = []
         chat_history = [] 
         for i in range(self.num_replans):
@@ -139,6 +154,7 @@ class DialogPrompter:
                 plan_feedbacks,
                 replan_idx=i,
                 save_path=save_path,
+                image_paths=image_paths,
             )
             chat_history += agent_responses
             parse_succ, parsed_str, llm_plans = self.parser.parse(obs, final_response) 
@@ -170,7 +186,7 @@ This previous response from [{final_agent}] failed to parse!: '{final_response}'
             ]
             timestamp = datetime.now().strftime("%m%d-%H%M")
             fname = f'{save_path}/replan{i}_feedback_{timestamp}.json'
-            json.dump(tosave, open(fname, 'w')) 
+            _write_json(fname, tosave)
 
             if ready_to_execute: 
                 break  
@@ -186,6 +202,7 @@ This previous response from [{final_agent}] failed to parse!: '{final_response}'
         feedback_history, 
         replan_idx=0,
         save_path='data/',
+        image_paths: Optional[Sequence[Union[str, Path]]] = None,
         ):
         """
         keep prompting until an EXECUTE is outputted or max_calls_per_round is reached
@@ -210,13 +227,16 @@ This previous response from [{final_agent}] failed to parse!: '{final_response}'
                 agent_prompt = f"You are {agent_name}, your response is:"
                 if n_calls == self.max_calls_per_round - 1:
                     agent_prompt = f"""
-You are {agent_name}, this is the last call, you must end your response by incoporating all previous discussions and output the best plan via EXECUTE. 
+You are {agent_name}, this is the last call. Incorporate all previous
+discussions and output the best next joint action via EXECUTE, or output
+TASK_DONE if the accumulated plan already covers the complete task.
 Your response is:
                     """
                 response, usage = self.query_once(
                     system_prompt, 
                     user_prompt=agent_prompt, 
                     max_query=5,
+                    image_paths=image_paths,
                     )
                 
                 tosave = [ 
@@ -236,7 +256,7 @@ Your response is:
                 ]
                 timestamp = datetime.now().strftime("%m%d-%H%M")
                 fname = f'{save_path}/replan{replan_idx}_call{n_calls}_agent{agent_name}_{timestamp}.json'
-                json.dump(tosave, open(fname, 'w'))  
+                _write_json(fname, tosave)
 
                 num_responses[agent_name] += 1
                 # strip all the repeated \n and blank spaces in response: 
@@ -247,7 +267,7 @@ Your response is:
                     )
                 usages.append(usage)
                 n_calls += 1
-                if 'EXECUTE' in response:
+                if 'EXECUTE' in response or _contains_task_done(response):
                     if replan_idx > 0 or all([v > 0 for v in num_responses.values()]):
                         dialog_done = True
                         break
@@ -263,7 +283,13 @@ Your response is:
         # print(response)  
         return agent_name, response, agent_responses
 
-    def query_once(self, system_prompt, user_prompt, max_query):
+    def query_once(
+        self,
+        system_prompt,
+        user_prompt,
+        max_query,
+        image_paths: Optional[Sequence[Union[str, Path]]] = None,
+    ):
         response = None
         usage = None   
         # print('======= system prompt ======= \n ', system_prompt)
@@ -280,11 +306,19 @@ Your response is:
         for n in range(max_query):
             print('querying {}th time'.format(n))
             try:
-                response, usage = self.llm_client.generate(
-                    prompt=system_prompt + user_prompt,
-                    max_output_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                )
+                if image_paths:
+                    response, usage = self.llm_client.generate_multimodal(
+                        prompt=system_prompt + user_prompt,
+                        image_paths=image_paths,
+                        max_output_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                    )
+                else:
+                    response, usage = self.llm_client.generate(
+                        prompt=system_prompt + user_prompt,
+                        max_output_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                    )
                 print('======= response ======= \n ', response)
                 print('======= usage ======= \n ', usage)
                 break
@@ -325,6 +359,14 @@ Your response is:
                 parsed_plan
             )
         return 
+
+    def post_plan_update(self, parsed_plan: str):
+        """Record an accepted planning step without claiming it was executed."""
+        chats = "\n".join(self.latest_chat_history)
+        self.round_history.append(
+            f"[Chat History]\n{chats}\n[Accepted Planned Action]\n"
+            f"{parsed_plan}"
+        )
 
     def post_episode_update(self):
         # clear for next episode
