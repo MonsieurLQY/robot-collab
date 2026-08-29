@@ -12,6 +12,7 @@ class VisualDualArmTask(ABC):
     task_description = ""
     task_instruction = ""
     task_rules = ""
+    supports_task_done = False
     default_image_paths: Sequence[str] = ()
     robot_name_map: Dict[str, str] = {
         "left_arm": "LeftArm",
@@ -21,23 +22,16 @@ class VisualDualArmTask(ABC):
     def get_action_prompt(self) -> str:
         return """
 [Action Options]
-The atomic action library is intentionally unrestricted in this version.
-Choose one concise atomic action for each arm. Use WAIT when an arm does not
-need to act in the current planning round. Do not combine several physical
+1) <atomic action>: The atomic action library is intentionally unrestricted in
+this version. Choose one concise physical operation and do not combine several
 operations into one action.
+2) WAIT, do nothing.
+Plan exactly one action for each arm at every round.
 
 [Action Output Instruction]
-The two agents may discuss first. End a discussion message with PROCEED when
-more discussion is needed. Once both agents agree on the next joint planning
-step, output exactly:
-
-EXECUTE
-NAME LeftArm ACTION <one concise action>
-NAME RightArm ACTION <one concise action>
-
-When the accumulated planned actions completely cover the task, output only:
-
-TASK_DONE
+Must first output 'EXECUTE\n', then give exactly one action per robot, put each
+on a new line.
+Example: 'EXECUTE\nNAME LeftArm ACTION <one concise action>\nNAME RightArm ACTION WAIT\n'
 """.strip()
 
     def get_agent_prompt(
@@ -53,33 +47,25 @@ TASK_DONE
             if name != agent_name
         )
         arm_side = "left" if agent_name == "LeftArm" else "right"
-        image_list = "\n".join(
-            f"- {path}" for path in observation.image_paths
-        )
+        other_side = "right" if arm_side == "left" else "left"
         return f"""
-[Task]
+You are a robot {agent_name}, collaborating with {other_agent} as the
+{arm_side} and {other_side} arms of one shared dual-arm robot.
 {self.task_instruction.strip()}
-
-[Task Rules]
 {self.task_rules.strip()}
 
-[Robot Configuration]
-You are {agent_name}, the planning agent for the {arm_side} arm of one shared
-dual-arm robot. {other_agent} controls the other arm of the same robot. The two
-agents must produce one coordinated plan, not two unrelated plans.
-
-[Visual Observation]
-The attached image or images are the robot's first-person observation of the
-initial environment:
-{image_list}
-Use visible evidence from the images. The actions in [History] are accepted
-planning steps, not physically executed actions. Continue from their expected
-effects when choosing the next planning step.
-
-[Current Round]
-Reason about the next atomic action for your arm and inspect {other_agent}'s
-proposal for task-order or coordination mistakes. Respond concisely. Propose
-exactly one current action for yourself. Use PROCEED while discussion is still
-needed, EXECUTE to summarize the agreed next joint action, or TASK_DONE after
-the accumulated plan fully covers the task.
+At the current round:
+You can observe the current environment from the attached first-person image.
+The actions in [History] are accepted planning steps, not physically executed
+actions. Continue planning from their expected effects.
+Think step-by-step about the task and {other_agent}'s response. Carefully check
+and correct them if they made a mistake.
+Improve your plans if given [Environment Feedback].
+Respond very concisely but informatively, and do not repeat what others have
+said. Discuss with others to come up with the best plan.
+Propose exactly one action for yourself at the **current** round, select from
+[Action Options].
+End your response by either: 1) output PROCEED, if the plans require further
+discussion; 2) If everyone has made proposals and got approved, output the
+final plan, must strictly follow [Action Output Instruction]!
 """.strip()

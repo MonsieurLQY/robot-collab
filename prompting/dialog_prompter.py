@@ -226,12 +226,19 @@ This previous response from [{final_agent}] failed to parse!: '{final_response}'
                 
                 agent_prompt = f"You are {agent_name}, your response is:"
                 if n_calls == self.max_calls_per_round - 1:
-                    agent_prompt = f"""
-You are {agent_name}, this is the last call. Incorporate all previous
-discussions and output the best next joint action via EXECUTE, or output
-TASK_DONE if the accumulated plan already covers the complete task.
+                    if getattr(self.env, "supports_task_done", False):
+                        agent_prompt = f"""
+You are {agent_name}, this is the last call, you must end your response by
+incorporating all previous discussions and output the best plan via EXECUTE,
+or output TASK_DONE if the accumulated plan already covers the complete task.
 Your response is:
-                    """
+                        """
+                    else:
+                        agent_prompt = f"""
+You are {agent_name}, this is the last call, you must end your response by
+incorporating all previous discussions and output the best plan via EXECUTE.
+Your response is:
+                        """
                 response, usage = self.query_once(
                     system_prompt, 
                     user_prompt=agent_prompt, 
@@ -267,7 +274,15 @@ Your response is:
                     )
                 usages.append(usage)
                 n_calls += 1
-                if 'EXECUTE' in response or _contains_task_done(response):
+                supports_task_done = getattr(
+                    self.env,
+                    "supports_task_done",
+                    False,
+                )
+                if (
+                    'EXECUTE' in response
+                    or supports_task_done and _contains_task_done(response)
+                ):
                     if replan_idx > 0 or all([v > 0 for v in num_responses.values()]):
                         dialog_done = True
                         break
