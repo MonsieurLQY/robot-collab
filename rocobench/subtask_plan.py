@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Callable, List, Optional, Tuple, Union, Dict, Set, Any, FrozenSet
 from dm_control.utils.inverse_kinematics import qpos_from_site_pose
-from pydantic import dataclasses, validator
+from pydantic.v1 import dataclasses, validator
 from rocobench.envs.env_utils import Pose
 import matplotlib.pyplot as plt
 

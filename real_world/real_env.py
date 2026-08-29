@@ -7,7 +7,7 @@ import seaborn as sns
 import torch
 
 from typing import Dict, List
-from pydantic import dataclasses, validator
+from pydantic.v1 import dataclasses, validator
 
 from real_world.utils.generic import AllowArbitraryTypes
 from real_world.kinect import KinectClient

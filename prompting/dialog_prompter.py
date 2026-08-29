@@ -1,7 +1,7 @@
 import os 
 import json
 import pickle 
-import openai
+import time
 import numpy as np
 from datetime import datetime
 from os.path import join
@@ -11,11 +11,13 @@ from rocobench.subtask_plan import LLMPathPlan
 from rocobench.rrt_multi_arm import MultiArmRRT
 from rocobench.envs import MujocoSimEnv, EnvState 
 from .feedback import FeedbackManager
+from .llm_config import (
+    DEFAULT_GEMINI_MODEL,
+    VertexGeminiClient,
+    get_retry_delay,
+    is_retryable_error,
+)
 from .parser import LLMResponseParser
-
-assert os.path.exists("openai_key.json"), "Please put your OpenAI API key in a string in robot-collab/openai_key.json"
-OPENAI_KEY = str(json.load(open("openai_key.json")))
-openai.api_key = OPENAI_KEY
 
 PATH_PLAN_INSTRUCTION="""
 [Path Plan Instruction]
@@ -42,7 +44,7 @@ class DialogPrompter:
         env: MujocoSimEnv,
         parser: LLMResponseParser,
         feedback_manager: FeedbackManager, 
-        max_tokens: int = 512,
+        max_tokens: int = 2048,
         debug_mode: bool = False,
         use_waypoints: bool = False,
         robot_name_map: Dict[str, str] = {"panda": "Bob"},
@@ -51,7 +53,10 @@ class DialogPrompter:
         use_history: bool = True,  
         use_feedback: bool = True,
         temperature: float = 0,
-        llm_source: str = "gpt-4"
+        llm_source: str = DEFAULT_GEMINI_MODEL,
+        credentials_path: Optional[str] = None,
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
     ):
         self.max_tokens = max_tokens
         self.debug_mode = debug_mode
@@ -70,7 +75,18 @@ class DialogPrompter:
         self.max_calls_per_round = max_calls_per_round 
         self.temperature = temperature
         self.llm_source = llm_source
-        assert llm_source in ["gpt-4", "gpt-3.5-turbo", "claude"], f"llm_source must be one of [gpt4, gpt-3.5-turbo, claude], got {llm_source}"
+        if not self.llm_source.strip():
+            raise ValueError("llm_source must not be empty")
+        self.llm_client = (
+            None
+            if self.debug_mode
+            else VertexGeminiClient(
+                credentials_path=credentials_path,
+                model=self.llm_source,
+                project=vertex_project,
+                location=vertex_location,
+            )
+        )
 
     def compose_system_prompt(
         self, 
@@ -200,7 +216,7 @@ Your response is:
                 response, usage = self.query_once(
                     system_prompt, 
                     user_prompt=agent_prompt, 
-                    max_query=3,
+                    max_query=5,
                     )
                 
                 tosave = [ 
@@ -260,26 +276,39 @@ Your response is:
                 response += f"NAME {aname} ACTION {action}\n"
             return response, dict()
 
+        last_error = None
         for n in range(max_query):
             print('querying {}th time'.format(n))
             try:
-                response = openai.ChatCompletion.create(
-                    model=self.llm_source, 
-                    messages=[
-                        # {"role": "user", "content": ""},
-                        {"role": "system", "content": system_prompt+user_prompt},                                    
-                    ],
-                    max_tokens=self.max_tokens,
+                response, usage = self.llm_client.generate(
+                    prompt=system_prompt + user_prompt,
+                    max_output_tokens=self.max_tokens,
                     temperature=self.temperature,
-                    )
-                usage = response['usage']
-                response = response['choices'][0]['message']["content"]
+                )
                 print('======= response ======= \n ', response)
                 print('======= usage ======= \n ', usage)
                 break
-            except:
-                print("API error, try again")
+            except Exception as exc:
+                last_error = exc
+                if not is_retryable_error(exc):
+                    print(f"Vertex AI Gemini error: {exc!r}; not retrying")
+                    break
+                if n == max_query - 1:
+                    print(
+                        f"Vertex AI Gemini error: {exc!r}; retry limit reached"
+                    )
+                    break
+                delay = get_retry_delay(n, exc)
+                print(
+                    f"Vertex AI Gemini error: {exc!r}; "
+                    f"retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
             continue
+        if response is None:
+            raise RuntimeError(
+                f"Vertex AI Gemini request failed after {max_query} attempts"
+            ) from last_error
         # breakpoint()
         return response, usage
     

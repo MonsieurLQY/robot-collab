@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from collections import deque, defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from numpy.typing import ArrayLike, NDArray
-from pydantic import dataclasses, validator
+from pydantic.v1 import dataclasses, validator
 
 import mujoco
 from mujoco import FatalError as mujocoFatalError
@@ -836,5 +836,4 @@ class MujocoSimEnv:
 
     
     
-
 

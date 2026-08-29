@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Callable, List, Optional, Tuple, Union, Dict, Set
 from dm_control.utils.inverse_kinematics import qpos_from_site_pose
-from pydantic import dataclasses, validator
+from pydantic.v1 import dataclasses, validator
 import matplotlib.pyplot as plt
 
 from rocobench.envs import SimAction, EnvState, SimRobot
@@ -458,4 +458,3 @@ class PlannedPathPolicy:
         action = self.action_buffer[self.action_idx]
         self.action_idx += 1
         return action 
- 

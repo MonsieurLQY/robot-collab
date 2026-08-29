@@ -12,7 +12,7 @@ Codebase for paper: RoCo: Dialectic Multi-Robot Collaboration with Large Languag
 ## Setup
 ### setup conda env and package install
 ```
-conda create -n roco python=3.8 
+conda create -n roco python=3.9
 conda activate roco
 ```
 ### Install mujoco and dm_control 
@@ -27,25 +27,38 @@ Download the macos-compatible `.dmg` file from [MuJoCo release page](https://git
 ### Install other packages
 ```
 pip install -r requirements.txt
+pip install open3d==0.14.1
+pip install -e .
 ```
 
-### Acquire OpenAI/Claude API Keys
-This is required for prompting GPTs or Claude LLMs. You don't necessarily need both of them. Put your key string somewhere safely in your local repo, and provide a file path (something like `./roco/openai_key.json`) and load them in the scripts. Example code snippet:
-```
-import openai  
-openai.api_key = YOUR_OPENAI_KEY
+### Configure Vertex AI Gemini
+The default model is `gemini-3.7-flash` through Vertex AI. Authentication uses
+a Google Cloud service-account JSON file. By default the simulation uses:
 
-import anthropic
-client = anthropic.Client(api_key=YOUR_CLAUDE_KEY)
-streamed = client.completion_stream(...)  
+```text
+/home/lqy/.config/robopara/p-150gk23k-718446bc2ebd.json
 ```
+
+Override that location with `--credentials_path` or the
+`GOOGLE_APPLICATION_CREDENTIALS` environment variable. The default Vertex
+project is `p-150gk23k` and the default location is `global`; override them with
+`--vertex_project` / `--vertex_location` or `GOOGLE_CLOUD_PROJECT` /
+`GOOGLE_CLOUD_LOCATION`. Never commit a service-account file.
+
+The simulation uses the official `google-genai` SDK and sends each assembled
+prompt through `client.models.generate_content()`. The returned text continues
+to pass through the existing action parser.
 
 ## Usage 
-### Run multi-robot dialog on the PackGrocery Task using the latest GPT-4 model
+### Run a minimal Sort task with Gemini 3.7 Flash
 ```
 $ conda activate roco
-(roco) $ python run_dialog.py --task pack -llm gpt-4
+(roco) $ python run_dialog.py --task sort --llm_source gemini-3.7-flash --credentials_path /path/to/service-account.json --vertex_project p-150gk23k --vertex_location global --temperature 0 --comm_mode plan --tsteps 1 --num_replans 1 --no_feedback --skip_display --run_name gemini_smoke
 ```
+
+On a headless Linux machine, prefix the command with `MUJOCO_GL=egl` so MuJoCo can render camera observations without a desktop display.
+
+The command writes prompts, plans, state snapshots, and execution videos under `data/gemini_smoke/`. After it succeeds, remove `--no_feedback`, increase `--tsteps`, and increase `--num_replans` for a full episode.
 
 
 ## Contact

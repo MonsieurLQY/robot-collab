@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 from rocobench.envs import SortOneBlockTask, CabinetTask, MoveRopeTask, SweepTask, MakeSandwichTask, PackGroceryTask, MujocoSimEnv, SimRobot, visualize_voxel_scene
 from rocobench import PlannedPathPolicy, LLMPathPlan, MultiArmRRT
 from prompting import LLMResponseParser, FeedbackManager, DialogPrompter, SingleThreadPrompter, save_episode_html
+from prompting.llm_config import (
+    DEFAULT_GEMINI_MODEL,
+)
 
 # print out logging.info
 logging.basicConfig(level=logging.INFO)
@@ -56,7 +59,10 @@ class LLMRunner:
         use_history: bool = False,
         use_feedback: bool = False,
         temperature: float = 0.0,
-        llm_source: str = "gpt4",
+        llm_source: str = DEFAULT_GEMINI_MODEL,
+        credentials_path: Optional[str] = None,
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
         ):
         self.env = env
         self.env.reset()
@@ -123,7 +129,7 @@ class LLMRunner:
                 env=self.env,
                 parser=self.parser,
                 feedback_manager=self.feedback_manager,
-                max_tokens=1024,
+                max_tokens=2048,
                 debug_mode=self.debug_mode,
                 use_waypoints=(self.llm_output_mode == "action_and_path"),
                 use_history=self.use_history,
@@ -131,6 +137,9 @@ class LLMRunner:
                 comm_mode=llm_comm_mode,
                 temperature=self.temperature,
                 llm_source=llm_source,
+                credentials_path=credentials_path,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
             )
 
         else:
@@ -138,7 +147,7 @@ class LLMRunner:
                 env=self.env,
                 parser=self.parser,
                 feedback_manager=self.feedback_manager,
-                max_tokens=512,
+                max_tokens=2048,
                 debug_mode=self.debug_mode,
                 robot_name_map=self.env.robot_name_map,
                 max_calls_per_round=10,
@@ -148,6 +157,9 @@ class LLMRunner:
                 num_replans=self.llm_num_replans,
                 temperature=self.temperature,
                 llm_source=llm_source,
+                credentials_path=credentials_path,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
             )
 
 
@@ -418,7 +430,6 @@ def main(args):
         randomize_init=True,
         render_point_cloud=0,
         render_cameras=["face_panda","face_ur5e","teaser",],
-        one_obj_each=True,
     )
     robots = env.get_sim_robots()
     if args.no_feedback:
@@ -459,6 +470,9 @@ def main(args):
         use_feedback=(not args.no_feedback),
         temperature=args.temperature,
         llm_source=args.llm_source,
+        credentials_path=args.credentials_path,
+        vertex_project=args.vertex_project,
+        vertex_location=args.vertex_location,
     )
     runner.run(args)
 
@@ -470,7 +484,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_runs", '-nruns', type=int, default=1)
     parser.add_argument("--run_name", "-rn", type=str, default="test")
     parser.add_argument("--tsteps", "-t", type=int, default=10)
-    parser.add_argument("--task", type=str, default="sort_one")
+    parser.add_argument("--task", type=str, default="sort")
     parser.add_argument("--output_mode", type=str, default="action_only", choices=["action_only", "action_and_path"])
     parser.add_argument("--comm_mode", type=str, default="dialog", choices=["chat", "plan", "dialog"])
     parser.add_argument("--control_freq", "-cf", type=int, default=15)
@@ -487,7 +501,28 @@ if __name__ == "__main__":
     parser.add_argument("--split_parsed_plans", "-sp", action="store_true")
     parser.add_argument("--no_history", "-nh", action="store_true")
     parser.add_argument("--no_feedback", "-nf", action="store_true")
-    parser.add_argument("--llm_source", "-llm", type=str, default="gpt-4")
+    parser.add_argument("--llm_source", "-llm", type=str, default=DEFAULT_GEMINI_MODEL)
+    parser.add_argument(
+        "--credentials_path",
+        type=str,
+        default=None,
+        help=(
+            "Path to a Vertex AI service-account JSON file. Defaults to "
+            "GOOGLE_APPLICATION_CREDENTIALS, then the project default."
+        ),
+    )
+    parser.add_argument(
+        "--vertex_project",
+        type=str,
+        default=None,
+        help="Vertex AI project ID; defaults to GOOGLE_CLOUD_PROJECT",
+    )
+    parser.add_argument(
+        "--vertex_location",
+        type=str,
+        default=None,
+        help="Vertex AI location; defaults to GOOGLE_CLOUD_LOCATION",
+    )
     logging.basicConfig(level=logging.INFO)
 
     args = parser.parse_args()

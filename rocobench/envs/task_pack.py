@@ -4,7 +4,7 @@ import time
 import cv2 
 import random
 import numpy as np  
-from pydantic import dataclasses, validator 
+from pydantic.v1 import dataclasses, validator
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import dm_control 
 from dm_control.utils.transformations import mat_to_quat
@@ -424,4 +424,3 @@ if __name__ == "__main__":
     plt.imshow(img)
     plt.show()
     breakpoint()
-

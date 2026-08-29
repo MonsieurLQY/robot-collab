@@ -3,7 +3,7 @@ import os
 import io
 import numpy as np 
 from itertools import product
-from pydantic import dataclasses, validator
+from pydantic.v1 import dataclasses, validator
 from transforms3d import affines, quaternions, euler
 from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt 
@@ -534,4 +534,3 @@ class VisionSensorOutput:
         image[0, 2] = (self.width - 1) / 2.0
         image[1, 2] = (self.height - 1) / 2.0
         return image @ focal @ rotation @ translation
- 

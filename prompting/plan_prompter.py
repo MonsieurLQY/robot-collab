@@ -1,11 +1,17 @@
 import os 
 import json
 import pickle 
+import time
 import numpy as np
 from rocobench.envs import MujocoSimEnv, EnvState
-import openai
 from datetime import datetime
 from .feedback import FeedbackManager
+from .llm_config import (
+    DEFAULT_GEMINI_MODEL,
+    VertexGeminiClient,
+    get_retry_delay,
+    is_retryable_error,
+)
 from .parser import LLMResponseParser
 from typing import List, Tuple, Dict, Union, Optional, Any
 
@@ -24,10 +30,6 @@ Each <coord> is a tuple (x,y,z) for gripper location, follow these steps to plan
         e.g. given path [(0.1, 0.2, 0.3), (0.2, 0.2. 0.3), (0.3, 0.4. 0.7)], the distance between steps (0.1, 0.2, 0.3)-(0.2, 0.2. 0.3) is too low, and between (0.2, 0.2. 0.3)-(0.3, 0.4. 0.7) is too high. You can change the path to [(0.1, 0.2, 0.3), (0.15, 0.3. 0.5), (0.3, 0.4. 0.7)] 
     If a plan failed to execute, re-plan to choose more feasible steps in each PATH, or choose different actions.
 """
-OPENAI_KEY = str(json.load(open("openai_key.json")))
-openai.api_key = OPENAI_KEY
-
-
 def get_chat_prompt(env: MujocoSimEnv):
     robot_names = env.get_sim_robots().keys()
     talk_order_str = ",".join([f"[{name}]" for name in robot_names])
@@ -60,12 +62,15 @@ class SingleThreadPrompter:
         comm_mode: str = "plan", # or chat
         use_waypoints: bool = False,
         use_history: bool = True,
-        max_api_queries: int = 3,
+        max_api_queries: int = 5,
         num_replans: int = 3,
         debug_mode: bool = False,   
         temperature: float = 0,
-        max_tokens: int = 1000, 
-        llm_source: str = "gpt-4",
+        max_tokens: int = 2048,
+        llm_source: str = DEFAULT_GEMINI_MODEL,
+        credentials_path: Optional[str] = None,
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
     ):
         self.env = env 
         self.robot_agent_names = env.get_sim_robots().keys()
@@ -80,6 +85,18 @@ class SingleThreadPrompter:
         self.temperature = temperature
         self.llm_source = llm_source
         self.max_tokens = max_tokens
+        if not self.llm_source.strip():
+            raise ValueError("llm_source must not be empty")
+        self.llm_client = (
+            None
+            if self.debug_mode
+            else VertexGeminiClient(
+                credentials_path=credentials_path,
+                model=self.llm_source,
+                project=vertex_project,
+                location=vertex_location,
+            )
+        )
 
         self.round_history = [] # [obs_t, action_t] but only if action_t got executed
         self.failed_plans = [] # could inherit from previous round if the final plan failed to execute in env.
@@ -234,26 +251,40 @@ Re-format to strictly follow [Action Output Instruction]!
                 response += f"NAME {aname} ACTION {action}\n"
             return response, dict()
 
+        last_error = None
         for n in range(self.max_api_queries):
             print('querying {}th time'.format(n))
             try:
-                response = openai.ChatCompletion.create(
-                    model=self.llm_source,
-                    messages=[
-                        # {"role": "user", "content": user_prompt},
-                        {"role": "system", "content": system_prompt},                                    
-                    ],
-                    max_tokens=self.max_tokens,
-                    temperature=self.temperature, 
-                    )
-                usage = response['usage']
-                response = response['choices'][0]['message']["content"]
+                response, usage = self.llm_client.generate(
+                    prompt=system_prompt + user_prompt,
+                    max_output_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                )
                 print('======= response ======= \n ', response)
                 print('======= usage ======= \n ', usage)
                 break
-            except:
-                print("API error, try again")
+            except Exception as exc:
+                last_error = exc
+                if not is_retryable_error(exc):
+                    print(f"Vertex AI Gemini error: {exc!r}; not retrying")
+                    break
+                if n == self.max_api_queries - 1:
+                    print(
+                        f"Vertex AI Gemini error: {exc!r}; retry limit reached"
+                    )
+                    break
+                delay = get_retry_delay(n, exc)
+                print(
+                    f"Vertex AI Gemini error: {exc!r}; "
+                    f"retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
             continue
+        if response is None:
+            raise RuntimeError(
+                "Vertex AI Gemini request failed after "
+                f"{self.max_api_queries} attempts"
+            ) from last_error
         return response, usage
 
     
