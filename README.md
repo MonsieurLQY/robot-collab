@@ -94,7 +94,11 @@ history, and the final `plan.json` / `plan.txt` are saved under
 `data/visual_dialog/<run_name>/<timestamp>/`. The `office` task's allowed atomic
 action names are configured by `atomic_action_names` in
 `prompting/visual_tasks/task_office.py`; the parser validates the leading action
-name while leaving any following arguments unchecked.
+name while leaving any following arguments unchecked. `plan.json` groups
+non-`WAIT` actions under `schedule.left` and `schedule.right`, following the
+office schedule format. It includes only fields that can be determined from the
+text plan; named parameters such as `source` and `target` are included only when
+the model explicitly outputs them.
 
 
 ## Contact

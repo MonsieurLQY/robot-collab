@@ -1,6 +1,44 @@
+import ast
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+
+ACTION_NAME = re.compile(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
+SCHEDULE_ARM_INFO = {
+    "LeftArm": ("left", "L"),
+    "RightArm": ("right", "R"),
+}
+
+
+def _extract_action_name(action: str) -> Optional[str]:
+    match = ACTION_NAME.match(action)
+    if match is None:
+        return None
+    return match.group("name").lower()
+
+
+def _extract_named_parameters(action: str) -> Dict[str, object]:
+    """Return only JSON-safe keyword arguments explicitly present in an action."""
+    try:
+        expression = ast.parse(action.strip(), mode="eval").body
+    except (SyntaxError, ValueError):
+        return {}
+    if not isinstance(expression, ast.Call):
+        return {}
+
+    parameters: Dict[str, object] = {}
+    for keyword in expression.keywords:
+        if keyword.arg is None:
+            continue
+        try:
+            value = ast.literal_eval(keyword.value)
+        except (ValueError, TypeError):
+            continue
+        if value is None or isinstance(value, (str, int, float, bool)):
+            parameters[keyword.arg] = value
+    return parameters
 
 
 @dataclass(frozen=True)
@@ -45,15 +83,41 @@ class VisualPlan:
     status: str = "planning"
 
     def to_dict(self) -> Dict[str, object]:
+        schedule: Dict[str, List[Dict[str, object]]] = {
+            "left": [],
+            "right": [],
+        }
+        next_node_id = 1
+        arm_action_counts = {"left": 0, "right": 0}
+
+        for step in self.steps:
+            for agent_name, action in step.action_strs.items():
+                arm_info = SCHEDULE_ARM_INFO.get(agent_name)
+                skill = _extract_action_name(action)
+                if arm_info is None or skill is None or skill == "wait":
+                    continue
+
+                arm_name, action_prefix = arm_info
+                arm_action_counts[arm_name] += 1
+                parameters = _extract_named_parameters(action)
+                parameters["arm"] = arm_name
+                schedule[arm_name].append(
+                    {
+                        "action_id": (
+                            f"{action_prefix}{arm_action_counts[arm_name]}"
+                        ),
+                        "node_id": next_node_id,
+                        "skill": skill,
+                        "parameters": parameters,
+                        "agents": [arm_name],
+                        "arm_num": 1,
+                    }
+                )
+                next_node_id += 1
+
         return {
-            "task_id": self.task_id,
-            "task_name": self.task_name,
-            "image_paths": self.image_paths,
             "status": self.status,
-            "steps": [
-                step.to_dict(step_id=index)
-                for index, step in enumerate(self.steps, start=1)
-            ],
+            "schedule": schedule,
         }
 
     def to_text(self) -> str:
