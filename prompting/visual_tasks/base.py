@@ -13,6 +13,7 @@ class VisualDualArmTask(ABC):
     task_instruction = ""
     task_rules = ""
     supports_task_done = False
+    atomic_action_names: Sequence[str] = ()
     default_image_paths: Sequence[str] = ()
     robot_name_map: Dict[str, str] = {
         "left_arm": "LeftArm",
@@ -20,18 +21,43 @@ class VisualDualArmTask(ABC):
     }
 
     def get_action_prompt(self) -> str:
-        return """
+        if self.atomic_action_names:
+            action_lines = [
+                f"{index}) {action_name}"
+                for index, action_name in enumerate(
+                    self.atomic_action_names,
+                    start=1,
+                )
+            ]
+            action_lines.append(
+                f"{len(action_lines) + 1}) WAIT, do nothing."
+            )
+            action_options = "\n".join(action_lines)
+            action_rule = (
+                "Only use an action name listed above. Every non-WAIT ACTION "
+                "must begin with exactly one listed action name. Any following "
+                "description is allowed but is not part of the action name."
+            )
+        else:
+            action_options = (
+                "1) <atomic action>: Choose one concise physical operation.\n"
+                "2) WAIT, do nothing."
+            )
+            action_rule = (
+                "The atomic action library is unrestricted for this task."
+            )
+
+        return f"""
 [Action Options]
-1) <atomic action>: The atomic action library is intentionally unrestricted in
-this version. Choose one concise physical operation and do not combine several
-operations into one action.
-2) WAIT, do nothing.
+{action_options}
+{action_rule}
+Do not combine several physical operations into one action.
 Plan exactly one action for each arm at every round.
 
 [Action Output Instruction]
 Must first output 'EXECUTE\n', then give exactly one action per robot, put each
 on a new line.
-Example: 'EXECUTE\nNAME LeftArm ACTION <one concise action>\nNAME RightArm ACTION WAIT\n'
+Example: 'EXECUTE\nNAME LeftArm ACTION pick marker\nNAME RightArm ACTION WAIT\n'
 """.strip()
 
     def get_agent_prompt(

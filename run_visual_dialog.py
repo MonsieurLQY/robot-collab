@@ -72,7 +72,10 @@ def run_visual_planning(args: argparse.Namespace) -> Path:
     rounds_dir.mkdir()
 
     observation = VisualObservation(image_paths=tuple(image_paths))
-    parser = VisualPlanParser(task.robot_name_map.values())
+    parser = VisualPlanParser(
+        task.robot_name_map.values(),
+        allowed_action_names=task.atomic_action_names,
+    )
     feedback_manager = VisualFeedbackManager()
     prompter = DialogPrompter(
         env=task,

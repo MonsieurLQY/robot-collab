@@ -8,6 +8,12 @@ class OfficeTask(VisualDualArmTask):
     task_name = "Dual-arm office desk organization"
     task_description = "Complete the ordered eight-step office desk task"
     supports_task_done = True
+    atomic_action_names = (
+        "pick",
+        "place",
+        "flap_close",
+        "adjust",
+    )
     default_image_paths = ("rocobench/envs/env_office_p2.jpg",)
 
     task_instruction = """

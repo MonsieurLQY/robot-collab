@@ -91,8 +91,10 @@ python run_visual_dialog.py -t office -i /path/to/front.jpg -i /path/to/side.jpg
 Edit the full ordered instruction in
 `prompting/visual_tasks/task_office.py`. Accepted steps, per-agent calls, chat
 history, and the final `plan.json` / `plan.txt` are saved under
-`data/visual_dialog/<run_name>/<timestamp>/`. The action vocabulary is not yet
-restricted to a user-provided atomic action library.
+`data/visual_dialog/<run_name>/<timestamp>/`. The `office` task's allowed atomic
+action names are configured by `atomic_action_names` in
+`prompting/visual_tasks/task_office.py`; the parser validates the leading action
+name while leaving any following arguments unchecked.
 
 
 ## Contact
@@ -123,4 +125,3 @@ print(next(x['message'] for x in data if x.get('sender') == 'Planner'))
 ```
 python run_visual_dialog.py -t office
 ```
-
