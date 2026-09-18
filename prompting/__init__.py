@@ -1,5 +1,17 @@
-from prompting.parser import LLMResponseParser
-from prompting.feedback import FeedbackManager
-from prompting.dialog_prompter import DialogPrompter
-from prompting.plan_prompter import SingleThreadPrompter
-from prompting.display_utils import save_episode_html
+"""Prompting interfaces, loaded lazily to keep backend dependencies separate."""
+from importlib import import_module
+
+_EXPORTS = {
+    "LLMResponseParser": "parser", "FeedbackManager": "feedback",
+    "DialogPrompter": "dialog_prompter", "SingleThreadPrompter": "plan_prompter",
+    "save_episode_html": "display_utils",
+}
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    value = getattr(import_module("." + _EXPORTS[name], __name__), name)
+    globals()[name] = value
+    return value

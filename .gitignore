@@ -169,6 +169,12 @@ cython_debug/
 #.idea/
 
 AGENTS.md
-tests/
-changelog/
+/tests/*
+!/tests/test_robopara_adapter.py
+!/tests/test_robopara_dialog.py
+!/tests/test_planning_limits.py
+!/tests/test_terminal_log.py
+/changelog/*
+!/changelog/2026-09-13-robopara-baseline.md
+!/changelog/2026-09-14-terminal-log.md
 .vscode/

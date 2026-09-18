@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from rocobench.envs import SortOneBlockTask, CabinetTask, MoveRopeTask, SweepTask, MakeSandwichTask, PackGroceryTask, MujocoSimEnv, SimRobot, visualize_voxel_scene
 from rocobench import PlannedPathPolicy, LLMPathPlan, MultiArmRRT
 from prompting import LLMResponseParser, FeedbackManager, DialogPrompter, SingleThreadPrompter, save_episode_html
+from prompting.terminal_log import record_terminal
 from prompting.llm_config import (
     DEFAULT_GEMINI_MODEL,
 )
@@ -332,6 +333,10 @@ class LLMRunner:
 
 
     def run(self, args):
+        with record_terminal(os.path.join(self.run_dir, "terminal.txt")):
+            return self._run(args)
+
+    def _run(self, args):
         start_id = 0 if args.start_id == -1 else args.start_id
         if args.cont:
             logging.info("Continuing from previous run")
