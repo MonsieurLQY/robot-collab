@@ -175,8 +175,10 @@ AGENTS.md
 !/tests/test_planning_limits.py
 !/tests/test_terminal_log.py
 !/tests/test_robopara_live_image.py
+!/tests/test_robopara_scoring.py
 /changelog/*
 !/changelog/2026-09-13-robopara-baseline.md
 !/changelog/2026-09-14-terminal-log.md
 !/changelog/2026-09-18-latest-frame-input.md
+!/changelog/2026-09-27-run-scoring.md
 .vscode/

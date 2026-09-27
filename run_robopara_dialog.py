@@ -9,6 +9,9 @@ from prompting.dialog_prompter import DialogPrompter
 from prompting.llm_config import DEFAULT_GEMINI_MODEL, detect_image_mime_type
 from prompting.terminal_log import record_terminal
 from prompting.robopara.adapter import DesktopTask, PlannerClient, PlatformFeedback, SemanticParser
+from prompting.robopara.scoring import (
+    PLANNING, EpisodeScore, build_score_report, format_score_summary, goal_results,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -52,6 +55,18 @@ def capture_scene_image(result, round_dir):
     return target, {**frame, "saved_path": str(target)}
 
 
+def fallback_score(seed, goals, result, planning_s, total_s, termination_reason):
+    """Client-side score when the platform returned none (e.g. close failed)."""
+    return EpisodeScore(
+        task_id="desktop_cleanup", seed=seed, success=bool(result.get("task_success", False)),
+        total_wallclock_s=total_s, phase_wallclock_s={PLANNING: planning_s},
+        sim_time_s=result.get("sim_time_s"), episode_id=result.get("episode_id"),
+        termination_reason=termination_reason,
+        goal_results=goal_results(goals, (result.get("state") or {}).get("predicates") or {}),
+        extra={"source": "client_fallback"},
+    ).to_dict()
+
+
 def run_episode(args, seed):
     images, instruction = resolve_visual_input(args)
     directory = Path(args.data_dir) / args.run_name / f"seed_{seed}"
@@ -69,11 +84,14 @@ def _run_episode(args, seed, images, instruction, directory):
     termination_reason, error, close_error = "max_rounds", None, None
     consecutive_failures = 0
     planning_s = 0.0
+    unreported_planning_s = 0.0  # Model time not yet sent to the platform's score.
+    goals, score = [], None
     started = time.perf_counter()
     try:
         with budget.episode():
             result = client.call("reset", task="desktop_cleanup", seed=seed)
             task_spec = dict(result["task"])
+            goals = list(task_spec.get("goals", []))
             if instruction is not None:
                 task_spec["instruction"] = instruction.strip()
             task = DesktopTask(task_spec, image_input=True, live_image=live_images)
@@ -112,7 +130,9 @@ def _run_episode(args, seed, images, instruction, directory):
                     ready, plans, feedback, chat = prompter.prompt_one_round(
                         result["state"], save_path=str(round_dir), image_paths=round_images)
                 finally:
-                    planning_s += time.perf_counter() - began
+                    elapsed = time.perf_counter() - began
+                    planning_s += elapsed
+                    unreported_planning_s += elapsed
                 if not ready:
                     records.append({"accepted": False, "feedback": feedback, "chat": chat,
                                     "image": frame})
@@ -122,7 +142,9 @@ def _run_episode(args, seed, images, instruction, directory):
                         break
                     continue
                 plan = plans[0]
-                result = client.call("execute", actions=plan.actions)
+                result = client.call("execute", actions=plan.actions,
+                                     planning_wallclock_s=unreported_planning_s)
+                unreported_planning_s = 0.0
                 task.last_execution = None if args.no_feedback else {key: result.get(key) for key in (
                     "reason", "execution_success", "completed", "failed", "interrupted", "diagnostics")}
                 prompter.post_execute_update(json.dumps(result["state"]),
@@ -147,10 +169,15 @@ def _run_episode(args, seed, images, instruction, directory):
         try:
             if client.episode_id:
                 with deadline(5, "close_timeout"):
-                    client.call("close")
+                    closed = client.call("close", planning_wallclock_s=unreported_planning_s,
+                                         termination_reason=termination_reason)
+                score = closed.get("score") if isinstance(closed, dict) else None
         except Exception as exc:
             close_error = str(exc)
         finally:
+            if not isinstance(score, dict):
+                score = fallback_score(seed, goals, result, planning_s,
+                                       time.perf_counter() - started, termination_reason)
             summary = {"seed": seed, "track": "state_based_shared_executor",
                        "algorithm": "roco_adapted", "model": args.llm_source,
                        "observation_mode": observation_mode,
@@ -167,12 +194,17 @@ def _run_episode(args, seed, images, instruction, directory):
                                   "model_timeout": args.model_timeout,
                                   "max_consecutive_failures": args.max_consecutive_failures},
                        "task_success": bool(result.get("task_success", False)),
-                       "result": result, "rounds": records}
+                       "score": score, "result": result, "rounds": records}
             summary["model_calls"] = budget.calls
             summary["saved_model_responses"] = len(list(directory.glob("round_*/replan*_call*_agent*.json")))
             (directory / "summary.json").write_text(
                 json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"seed={seed} task_success={summary['task_success']} reason={termination_reason} model_calls={budget.calls}/{budget.max_calls} logs={directory}")
+    done = [name for name, ok in score["goal_results"].items() if ok]
+    sim = "n/a" if score.get("sim_time_s") is None else f"{score['sim_time_s']:.2f}s"
+    print(f"seed={seed} score: goals {score['goal_ratio']} done={done} | wallclock "
+          f"total {score['total_wallclock_s']:.2f}s (planning {score['planning_wallclock_s']:.2f}s, "
+          f"execution {score['execution_wallclock_s']:.2f}s) | sim time {sim}")
     return summary
 
 
@@ -220,8 +252,18 @@ def main():
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     results = [run_episode(args, args.seed + i) for i in range(args.episodes)]
-    aggregate = {"episodes": len(results), "success_rate": sum(r["task_success"] for r in results) / len(results)}
-    (Path(args.data_dir) / args.run_name / "aggregate.json").write_text(json.dumps(aggregate, indent=2))
+    run_dir = Path(args.data_dir) / args.run_name
+    report = build_score_report(
+        [EpisodeScore.from_dict(r["score"]) for r in results],
+        metadata={"algorithm": "roco_adapted", "model": args.llm_source,
+                  "track": "state_based_shared_executor", "run_name": args.run_name})
+    (run_dir / "score_report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    aggregate = {"episodes": len(results), "success_rate": sum(r["task_success"] for r in results) / len(results),
+                 "score": report["overall"]}
+    (run_dir / "aggregate.json").write_text(json.dumps(aggregate, indent=2, ensure_ascii=False))
+    print(f"[score] {format_score_summary(report)}")
+    print(f"[score] report: {run_dir / 'score_report.json'}")
     return 0 if all(r["task_success"] for r in results) else 1
 
 

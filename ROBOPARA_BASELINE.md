@@ -8,7 +8,8 @@
 ## 分支与环境
 
 - RoCo：当前 `dev`，入口 `run_robopara_dialog.py`。
-- RoboPARA：`feat/roco`，工作目录 `/home/lqy/Projects/RoboPARA-2.0-roco`。
+- RoboPARA：`feat/roco` 分支，工作目录 `/home/lqy/Projects/RoboPARA-2.0`（不再单独建文件夹）。
+  与 `main` 等分支在同一文件夹内用 `git switch feat/roco` / `git switch main` 切换；`robopara2` 环境的 editable 安装指向该文件夹，运行的是当前检出的分支。
 - 当前机器使用 `roco39` 调用模型，`robopara2` 执行仿真。现有 `roco` 缺少 `google-genai`。
 - 以下命令不需要把两个项目安装到同一环境。模型和凭据参数继承现有 Gemini 客户端。
 
@@ -17,7 +18,8 @@
 终端一：
 
 ```bash
-cd /home/lqy/Projects/RoboPARA-2.0-roco
+cd /home/lqy/Projects/RoboPARA-2.0
+git switch feat/roco
 conda activate robopara2
 python -m scripts.serve_planner_evaluation \
   --port 8010 --max-steps 12000 --round-max-steps 3600 \
@@ -60,6 +62,19 @@ python run_robopara_dialog.py
 客户端保存每次模型请求、反馈、每轮结果、模型调用次数、规划耗时和总体成功率。
 平台保存实际动作、逐步执行诊断、仿真步数和最终真实成功状态。
 结果中的 `planner_stochasticity=true` 表示 MPlib 路径不保证逐位可复现。
+
+### 打分
+
+每回合结束时平台按任务目标谓词给出打分（口径见 RoboPARA `doc/SCORING.md`），汇总谓词 `success` 不计入：
+
+- 目标级：`goal_ratio`，例如 `2/5` 表示 5 个桌面目标完成 2 个；回合级：全部目标完成才算成功。
+  目标与 RoboPARA `main` 一致：`marker_in_holder`、`laptop_closed`、`trash_in_bin`、`mouse_on_laptop`、`cup_upright`。
+  交接不再是目标（`*_handover_completed` 仍在环境谓词里作诊断），需要时由规划器自行决定是否交接。
+- 用时：`planning_wallclock_s`（客户端模型讨论，随 `execute`/`close` 上报）、`execution_wallclock_s`（平台执行）、
+  `total_wallclock_s`、`sim_time_s`（步数 × 0.02 s）。
+- 位置：每个种子的 `data/<run-name>/seed_<N>/summary.json` 中的 `score`；整次运行的 `data/<run-name>/score_report.json`；
+  `aggregate.json` 中的 `score`；平台 `--log-dir` 日志中的 `score`。终端每个种子一行 `seed=N score: ...`，最后一行 `[score] ...` 为总体摘要。
+- 平台未返回打分（如 `close` 失败、旧版服务端）时，客户端按最后一次状态自行计算，`extra.source=client_fallback`，此时只有规划用时。
 
 ## 当前边界
 
