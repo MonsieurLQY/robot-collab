@@ -80,7 +80,10 @@ class PlanningLimitTest(unittest.TestCase):
         args = _build_parser().parse_args(['--data-dir', directory,
                                           '--run-name', 'bounded', *overrides])
         client = Mock(episode_id='fake')
-        state = {'task': {}, 'state': {}, 'terminal': False, 'task_success': False}
+        frame = Path(directory) / 'latest.jpg'  # Stand-in for the platform frame buffer.
+        frame.write_bytes(b'\xff\xd8\xff' + b'jpeg')
+        state = {'task': {}, 'state': {}, 'terminal': False, 'task_success': False,
+                 'steps': 0, 'image': {'path': str(frame), 'steps': 0, 'sequence': 1}}
         client.call.return_value = state
         prompter = Mock()
         prompter.prompt_one_round.side_effect = outcome

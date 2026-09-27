@@ -12,11 +12,11 @@ from prompting.robopara.adapter import DesktopTask, PlannerClient, PlatformFeedb
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_IMAGE = PROJECT_ROOT / "env_office_p4.png"
 DEFAULT_INSTRUCTION = PROJECT_ROOT / "instruction.txt"
 
 def resolve_visual_input(args):
-    images = [Path(path).expanduser().resolve() for path in (args.image or [str(DEFAULT_IMAGE)])]
+    # Without --image the platform's latest-frame buffer is read every round.
+    images = [Path(path).expanduser().resolve() for path in (args.image or [])]
     for image in images:
         detect_image_mime_type(image.read_bytes())
     instruction = args.instruction
@@ -28,6 +28,30 @@ def resolve_visual_input(args):
     return images, instruction
 
 
+def capture_scene_image(result, round_dir):
+    """Copy the platform's latest frame into the round log for the model to read.
+
+    The platform buffer keeps only the newest frame and is overwritten as the
+    robots move, so the model reads this copy: the logged image is exactly the
+    one it saw. Returns the copy's path and the frame record.
+    """
+    frame = result.get("image")
+    if not frame:
+        raise RuntimeError(
+            result.get("image_error") or "platform response has no image; start the planner "
+            "server without --no-frame-buffer, or pass --image for a static scene image")
+    if frame.get("steps") != result.get("steps"):
+        raise RuntimeError(
+            f"platform frame is stale: frame step {frame.get('steps')}, state step "
+            f"{result.get('steps')}; {result.get('image_error') or 'no capture error reported'}")
+    source = Path(frame["path"])
+    data = source.read_bytes()
+    detect_image_mime_type(data)
+    target = Path(round_dir) / ("scene" + source.suffix)
+    target.write_bytes(data)
+    return target, {**frame, "saved_path": str(target)}
+
+
 def run_episode(args, seed):
     images, instruction = resolve_visual_input(args)
     directory = Path(args.data_dir) / args.run_name / f"seed_{seed}"
@@ -37,6 +61,8 @@ def run_episode(args, seed):
 
 
 def _run_episode(args, seed, images, instruction, directory):
+    live_images = not images
+    observation_mode = "latest_frame" if live_images else "initial_image"
     client = PlannerClient(args.server_url, args.timeout)
     result, records = {}, []
     budget = PlanningBudget(args.max_model_calls, args.max_episode_seconds, args.model_timeout)
@@ -50,10 +76,12 @@ def _run_episode(args, seed, images, instruction, directory):
             task_spec = dict(result["task"])
             if instruction is not None:
                 task_spec["instruction"] = instruction.strip()
-            task = DesktopTask(task_spec, image_input=bool(images))
+            task = DesktopTask(task_spec, image_input=True, live_image=live_images)
+            if live_images:
+                images = [Path(result.get("image", {}).get("path", ""))]
             (directory / "request.json").write_text(json.dumps({
                 "task": task_spec, "image_paths": [str(path) for path in images],
-                "observation_mode": "initial_image" if images else "state",
+                "observation_mode": observation_mode,
                 "success_contract": "desktop_cleanup (unchanged)",
             }, indent=2, ensure_ascii=False), encoding="utf-8")
             prompter = DialogPrompter(
@@ -74,14 +102,20 @@ def _run_episode(args, seed, images, instruction, directory):
                     break
                 round_dir = directory / f"round_{index}"
                 round_dir.mkdir()
+                # Each round needs fresh environment information: read the newest frame.
+                round_images, frame = images, None
+                if live_images:
+                    scene, frame = capture_scene_image(result, round_dir)
+                    round_images = [scene]
                 began = time.perf_counter()
                 try:
                     ready, plans, feedback, chat = prompter.prompt_one_round(
-                        result["state"], save_path=str(round_dir), image_paths=images)
+                        result["state"], save_path=str(round_dir), image_paths=round_images)
                 finally:
                     planning_s += time.perf_counter() - began
                 if not ready:
-                    records.append({"accepted": False, "feedback": feedback, "chat": chat})
+                    records.append({"accepted": False, "feedback": feedback, "chat": chat,
+                                    "image": frame})
                     consecutive_failures += 1
                     if consecutive_failures >= args.max_consecutive_failures:
                         termination_reason = "consecutive_failure_limit"
@@ -95,7 +129,7 @@ def _run_episode(args, seed, images, instruction, directory):
                                              (True if args.no_feedback else result.get("execution_success", False)),
                                              plan.get_action_desp())
                 records.append({"accepted": True, "proposal": plan.get_action_desp(),
-                                "feedback": feedback, "result": result})
+                                "feedback": feedback, "image": frame, "result": result})
                 if result.get("terminal"):
                     termination_reason = "task_success" if result.get("task_success") else result.get("reason", "platform_terminal")
                     break
@@ -119,7 +153,7 @@ def _run_episode(args, seed, images, instruction, directory):
         finally:
             summary = {"seed": seed, "track": "state_based_shared_executor",
                        "algorithm": "roco_adapted", "model": args.llm_source,
-                       "observation_mode": "initial_image" if images else "state",
+                       "observation_mode": observation_mode,
                        "image_paths": [str(path) for path in images],
                        "single_agent": args.single_agent, "feedback": not args.no_feedback,
                        "planning_wallclock_s": planning_s,
@@ -145,7 +179,8 @@ def _run_episode(args, seed, images, instruction, directory):
 def _build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", "-i", action="append",
-                        help="Initial scene image; default: project env_office_p4.png. Repeat for multiple views.")
+                        help="Static scene image sent every round instead of the platform's latest "
+                             "frame; default: read the latest frame each round. Repeat for multiple views.")
     instruction_group = parser.add_mutually_exclusive_group()
     instruction_group.add_argument("--instruction", help="Task instruction text")
     instruction_group.add_argument("--instruction-file", help="UTF-8 task instruction file; default: project instruction.txt")

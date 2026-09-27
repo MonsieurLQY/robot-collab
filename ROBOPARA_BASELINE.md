@@ -8,7 +8,7 @@
 ## 分支与环境
 
 - RoCo：当前 `dev`，入口 `run_robopara_dialog.py`。
-- RoboPARA：`feat/planner-baseline`，工作目录 `/home/lqy/Projects/RoboPARA-2.0-planner-baseline`。
+- RoboPARA：`feat/roco`，工作目录 `/home/lqy/Projects/RoboPARA-2.0-roco`。
 - 当前机器使用 `roco39` 调用模型，`robopara2` 执行仿真。现有 `roco` 缺少 `google-genai`。
 - 以下命令不需要把两个项目安装到同一环境。模型和凭据参数继承现有 Gemini 客户端。
 
@@ -17,7 +17,7 @@
 终端一：
 
 ```bash
-cd /home/lqy/Projects/RoboPARA-2.0-planner-baseline
+cd /home/lqy/Projects/RoboPARA-2.0-roco
 conda activate robopara2
 python -m scripts.serve_planner_evaluation \
   --port 8010 --max-steps 12000 --round-max-steps 3600 \
@@ -91,8 +91,8 @@ conda activate roco39
 python run_visual_dialog.py --task office
 ```
 
-两个入口默认读取项目根目录的 `env_office_p4.png` 和 `instruction.txt`，无需传入路径。
-默认路径根据脚本位置解析，不依赖当前工作目录；显式图片与指令参数仍可覆盖仿真入口的默认值。
+离线视觉入口默认读取项目根目录的 `env_office_p4.png`；两个入口默认读取 `instruction.txt`。
+默认路径根据脚本位置解析，不依赖当前工作目录；显式图片与指令参数仍可覆盖默认值。
 独立视觉规划生成的 JSON 保持 `main` 格式，不直接作为仿真动作提交。
 
 图片输入接入逐轮仿真：
@@ -101,15 +101,19 @@ python run_visual_dialog.py --task office
 python run_robopara_dialog.py
 ```
 
-- `--image/-i` 可以重复传入多张图片，支持 PNG/JPEG/WebP。
-- 带图片时，环境提示使用初始图片，不再把真实物体坐标和机器人状态文本放入环境提示。
-  仍保留平台校验与执行反馈，因此不属于严格 RGB 评测。
-- 省略图片参数时使用固定图片；`request.json` 和 `summary.json` 记录实际图片路径和输入模式。
+- 默认读取平台最新帧，不再使用 `env_office_p4.png`：第一轮用 reset 后的画面，
+  之后每轮开始决策前，从上一次响应的 `image.path` 读取 buffer 里的最新一张（buffer 只有一张）。
+  平台在 reset、每 10 s 仿真时间和每轮结束时刷新这张图，所以每轮拿到的都是上一轮执行后的桌面。
+- 读取的图会复制到本轮日志目录 `round_<n>/scene.jpg`，模型读的就是这份副本；
+  buffer 之后被覆盖，日志里仍保留模型当时看到的那张图。每轮的帧信息记录在 `summary.json` 的 `rounds[].image`。
+- 平台响应没有图片（服务端以 `--no-frame-buffer` 启动）或图片步数与状态步数不一致（取帧失败）时，
+  回合以 `run_error` 结束，不把过期画面发给模型。
+- `--image/-i` 改为显式覆盖：传入后每轮都发送这些固定图片，不读取 buffer，支持 PNG/JPEG/WebP，可重复传入多张。
+  固定图片是静态参考，不会随执行更新，需要与本次 seed 场景对应。
+- 带图片时，环境提示不包含真实物体坐标和机器人状态文本；仍保留平台校验与执行反馈，因此不属于严格 RGB 评测。
+- `request.json` 和 `summary.json` 记录输入模式：`latest_frame`（默认）或 `initial_image`（固定图片）。
 - `--instruction` 与 `--instruction-file` 二选一；都不传时读取根目录 `instruction.txt`。
   自定义指令只改变模型输入，不能改变平台桌面清理成功条件。
-- 图片是静态初始参考，每次讨论会重复发送，不会执行后自动截图。
-  模型根据历史和执行反馈推理变化；提供的图片需要与本次 seed 场景对应。
-  图片模式建议每次只跑一个 seed，以免多个随机场景错误共用同一张初始图。
 - 图片输入不需要录像；新服务不支持 `--record-dir`。
 
 补充验证：RoCo 的 8 项对话／多模态测试通过，包括模拟 SDK 图片字节传输及离线视觉入口；

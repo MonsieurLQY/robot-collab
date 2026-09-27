@@ -102,9 +102,11 @@ class PlatformFeedback:
 
 
 class DesktopTask:
-    def __init__(self, task, image_input=False):
+    def __init__(self, task, image_input=False, live_image=False):
         self.task = task
         self.image_input = image_input
+        # Live images are the platform's latest frame, re-read every round.
+        self.live_image = live_image
         self.last_execution = None
 
     def get_action_prompt(self):
@@ -133,12 +135,18 @@ Environment success, not your claim, ends the episode.
 """
 
     def get_agent_prompt(self, obs, agent_name):
-        observation_text = (
-            "[Initial image observation]\nThe attached images show the initial scene. "
-            "They are reused, not updated after execution. Use action history and execution "
-            "feedback to reason about changes; do not treat old pixels as the current state."
-            if self.image_input else "[Current measured state]\n" + json.dumps(obs, ensure_ascii=False)
-        )
+        if self.image_input and self.live_image:
+            observation_text = (
+                "[Current image observation]\nThe attached image is the current scene, "
+                "captured by the platform camera after reset or after the most recent "
+                "execution. It is refreshed every round, so it shows the desk as it is now.")
+        elif self.image_input:
+            observation_text = (
+                "[Initial image observation]\nThe attached images show the initial scene. "
+                "They are reused, not updated after execution. Use action history and execution "
+                "feedback to reason about changes; do not treat old pixels as the current state.")
+        else:
+            observation_text = "[Current measured state]\n" + json.dumps(obs, ensure_ascii=False)
         return ("You are " + agent_name + ", the physical " + AGENTS[agent_name] + " arm.\n"
                 + "[Task]\n" + json.dumps(self.task, ensure_ascii=False)
                 + "\n" + observation_text
